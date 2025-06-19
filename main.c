@@ -182,8 +182,8 @@ main(int ac, char **av) {
         return 1;
     }
     int program_header_offset = lseek(fd_new, 0, SEEK_END);
-    if (section_header_offs == -1) {
-        fprintf(stderr, "error while lseeking in %s\n", av[1]);
+    if (program_header_offset == -1) {
+        fprintf(stderr, "error while lseeking\n");
         return 1;
     }
 
@@ -195,28 +195,28 @@ main(int ac, char **av) {
             return 1;
         }
 
-        int bytes_written = write(fd_new, &program_header, bytes_read);
-        if (bytes_written != bytes_read) {
+        int bytes_written = write(fd_new, &program_header, sizeof(program_header));
+        if (bytes_written != sizeof(program_header)) {
             fprintf(stderr, "error while writting to `woody`\n");
             return 1;
         }
     }
 
     // 0'ro the program header in new to make sure it's not used
-    // err = lseek(fd_new, header.e_phoff, SEEK_SET);
-    // if (err == -1) {
-    //     fprintf(stderr, "error while lseeking in %s\n", av[1]);
-    //     return 1;
-    // }
+    err = lseek(fd_new, header.e_phoff, SEEK_SET);
+    if (err == -1) {
+        fprintf(stderr, "error while lseeking in %s\n", av[1]);
+        return 1;
+    }
 
-    // Elf64_Phdr program_header_empty = {0};
-    // for (int i = 0; i < header.e_phnum; i++) {
-    //     int bytes_written = write(fd_new, &program_header_empty, sizeof(program_header_empty));
-    //     if (bytes_written != sizeof(program_header_empty)) {
-    //         fprintf(stderr, "error while writting to `woody`\n");
-    //         return 1;
-    //     }
-    // }
+    Elf64_Phdr program_header_empty = {0};
+    for (int i = 0; i < header.e_phnum; i++) {
+        int bytes_written = write(fd_new, &program_header_empty, sizeof(program_header_empty));
+        if (bytes_written != sizeof(program_header_empty)) {
+            fprintf(stderr, "error while writting to `woody`\n");
+            return 1;
+        }
+    }
 
     // Insert new program header
     // err = lseek(fd_new, 0, SEEK_END);
@@ -242,7 +242,7 @@ main(int ac, char **av) {
     // }
 
     // Set sh_off in header to correct new value
-    // header.e_phoff = program_header_offset;
+    header.e_phoff = program_header_offset;
     // header.e_phnum++;
     // header.e_entry = 0x60000;
     err = lseek(fd_new, 0, SEEK_SET);

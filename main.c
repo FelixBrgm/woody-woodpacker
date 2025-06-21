@@ -10,10 +10,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#ifndef MAP_ANONYMOUS
-#define MAP_ANONYMOUS 0x20 // cant find MAP_ANONYMOUS in sys/mman.h when running on Macs
-#endif
-
 int elf64_ident_check(const Elf64_Ehdr *header);
 
 int
@@ -35,16 +31,16 @@ main(int ac, char **av) {
         return 1;
     }
 
+    int bytes_written;
+    int bytes_read;
+
     Elf64_Ehdr header;
 
-    int bytes_read = read(fd_orig, &header, sizeof(header));
+    bytes_read = read(fd_orig, &header, sizeof(header));
     if (bytes_read != sizeof(header)) {
         fprintf(stderr, "error while reading %s\n", av[1]);
         return 1;
     }
-
-    printf("%p\n", header.e_shoff);
-    printf("%p\n", header.e_phoff);
 
     int err = elf64_ident_check(&header);
     if (err) {
@@ -65,189 +61,138 @@ main(int ac, char **av) {
             fprintf(stderr, "error while reading %s\n", av[1]);
             return 1;
         }
-        int bytes_written = write(fd_new, &buf, bytes_read);
+        bytes_written = write(fd_new, &buf, bytes_read);
         if (bytes_written == -1) {
             fprintf(stderr, "error while writting to `woody`\n");
             return 1;
         }
     } while (bytes_read == sizeof(buf));
 
-    // copy stup at the end
-    // int decrypt_offs = lseek(fd_new, 0, SEEK_END);
-    // if (err == -1) {
-    //     fprintf(stderr, "error while lseeking\n");
-    //     return 1;
-    // }
-
-    // unsigned char exit_code_4_shellcode[] = {
-    //     0x48, 0xc7, 0xc0, 0x3c, 0x00, 0x00, 0x00, // mov rax, 60
-    //     0x48, 0xc7, 0xc7, 0x04, 0x00, 0x00, 0x00, // mov rdi, 4
-    //     0x0f, 0x05                                // syscall
-    // };
-
-    // int decrypt_size = sizeof(exit_code_4_shellcode);
-
-    // int bytes_written = write(fd_new, &exit_code_4_shellcode, sizeof(exit_code_4_shellcode));
-    // if (bytes_written != sizeof(exit_code_4_shellcode)) {
-    //     fprintf(stderr, "error while writting to `woody`\n");
-    //     return 1;
-    // }
-
-    // Copy section header table at the end of new file
-    err = lseek(fd_orig, header.e_shoff, SEEK_SET);
-    if (err == -1) {
-        fprintf(stderr, "error while lseeking in %s\n", av[1]);
-        return 1;
-    }
-    int section_header_offs = lseek(fd_new, 0, SEEK_END);
-    if (section_header_offs == -1) {
-        fprintf(stderr, "error while lseeking in %s\n", av[1]);
+    // Copy shellcode to the end of the file
+    int decrypt_offs = lseek(fd_new, 0, SEEK_END);
+    if (decrypt_offs == -1) {
+        fprintf(stderr, "error while lseeking on `woody`\n");
         return 1;
     }
 
-    Elf64_Shdr section_header = {0};
-    for (int i = 0; i < header.e_shnum; i++) {
-        bytes_read = read(fd_orig, &section_header, sizeof(section_header));
-        if (bytes_read != sizeof(section_header)) {
-            fprintf(stderr, "error while reading %s\n", av[1]);
-            return 1;
-        }
-
-        int bytes_written = write(fd_new, &section_header, bytes_read);
-        if (bytes_written != bytes_read) {
-            fprintf(stderr, "error while writting to `woody`\n");
+    if (decrypt_offs % 0x1000 != 0) {
+        int alignment = 0x1000 - (decrypt_offs % 0x1000);
+        decrypt_offs = lseek(fd_new, alignment, SEEK_CUR);
+        if (decrypt_offs == -1) {
+            fprintf(stderr, "error while lseeking on `woody`\n");
             return 1;
         }
     }
 
-    // 0'ro the section header in new to make sure it's not used
-    err = lseek(fd_new, header.e_shoff, SEEK_SET);
-    if (err == -1) {
-        fprintf(stderr, "error while lseeking in %s\n", av[1]);
-        return 1;
-    }
+    unsigned char shellcode[] = {0x48, 0xc7, 0xc0, 0x3c, 0x00, 0x00, 0x00, // mov rax, 60
+                                 0x48, 0xc7, 0xc7, 0x04, 0x00, 0x00, 0x00, // mov rdi, 4
+                                 0x0f, 0x05};
 
-    Elf64_Shdr section_header_empty = {0};
-    for (int i = 0; i < header.e_shnum; i++) {
-        int bytes_written = write(fd_new, &section_header_empty, sizeof(section_header_empty));
-        if (bytes_written != sizeof(section_header_empty)) {
-            fprintf(stderr, "error while writting to `woody`\n");
-            return 1;
-        }
-    }
+    int decrypt_size = sizeof(shellcode);
 
-    // Insert new section_header
-    // err = lseek(fd_new, 0, SEEK_END);
-    // if (err == -1) {
-    //     fprintf(stderr, "error while lseeking in %s\n", av[1]);
-    //     return 1;
-    // }
-    // Elf64_Shdr section_header_insert = {.sh_name = 0, // e.g. 1 (if .shstrtab = "\0.text\0.data\0...")
-    //                                     .sh_type = SHT_PROGBITS,
-    //                                     .sh_flags = SHF_ALLOC | SHF_EXECINSTR,
-    //                                     .sh_addr = 0x60000,         // VA of .text in memory
-    //                                     .sh_offset = decrypt_offs, // Offset in file
-    //                                     .sh_size = decrypt_size,   // Length of .text
-    //                                     .sh_link = 0,
-    //                                     .sh_info = 0,
-    //                                     .sh_addralign = 4096,
-    //                                     .sh_entsize = 0};
-
-    // int bytes_written = write(fd_new, &section_header_insert, sizeof(section_header_insert));
-    // if (bytes_written != sizeof(section_header_insert)) {
-    //     fprintf(stderr, "error while writting to `woody`\n");
-    //     return 1;
-    // }
-
-    // Set sh_off in header to correct new value
-    header.e_shoff = section_header_offs;
-    // header.e_shnum++;
-    err = lseek(fd_new, 0, SEEK_SET);
-    if (err == -1) {
-        fprintf(stderr, "error while lseeking in %s\n", av[1]);
-        return 1;
-    }
-
-    int bytes_written = write(fd_new, &header, sizeof(header));
-    if (bytes_written != sizeof(header)) {
+    bytes_written = write(fd_new, &shellcode, sizeof(shellcode));
+    if (bytes_written != sizeof(shellcode)) {
         fprintf(stderr, "error while writting to `woody`\n");
         return 1;
     }
 
-    // Program headers
-    // Copy program headers to the end
-    err = lseek(fd_orig, header.e_phoff, SEEK_SET);
-    if (err == -1) {
-        fprintf(stderr, "error while lseeking in %s\n", av[1]);
-        return 1;
-    }
-    int program_header_offset = lseek(fd_new, 0, SEEK_END);
-    if (program_header_offset == -1) {
-        fprintf(stderr, "error while lseeking\n");
-        return 1;
-    }
-
-    Elf64_Phdr program_header = {0};
-    for (int i = 0; i < header.e_phnum; i++) {
-        bytes_read = read(fd_orig, &program_header, sizeof(program_header));
-        if (bytes_read != sizeof(program_header)) {
-            fprintf(stderr, "error while reading %s\n", av[1]);
-            return 1;
-        }
-
-        int bytes_written = write(fd_new, &program_header, sizeof(program_header));
-        if (bytes_written != sizeof(program_header)) {
-            fprintf(stderr, "error while writting to `woody`\n");
-            return 1;
-        }
-    }
-
-    // 0'ro the program header in new to make sure it's not used
     err = lseek(fd_new, header.e_phoff, SEEK_SET);
     if (err == -1) {
-        fprintf(stderr, "error while lseeking in %s\n", av[1]);
+        fprintf(stderr, "error while lseeking on `woody`\n");
         return 1;
     }
 
-    Elf64_Phdr program_header_empty = {0};
+    Elf64_Phdr program_header_note = {0};
+
+    int program_header_note_off = 0;
     for (int i = 0; i < header.e_phnum; i++) {
-        int bytes_written = write(fd_new, &program_header_empty, sizeof(program_header_empty));
-        if (bytes_written != sizeof(program_header_empty)) {
-            fprintf(stderr, "error while writting to `woody`\n");
+        bytes_read = read(fd_new, &program_header_note, sizeof(program_header_note));
+        if (bytes_read != sizeof(program_header_note)) {
+            fprintf(stderr, "error while reading from `woody`\n");
             return 1;
         }
+
+        program_header_note_off = header.e_phoff + i * sizeof(program_header_note);
+        if (program_header_note.p_type == PT_NOTE) break;
     }
 
-    // Insert new program header
-    // err = lseek(fd_new, 0, SEEK_END);
-    // if (err == -1) {
-    //     fprintf(stderr, "error while lseeking in %s\n", av[1]);
-    //     return 1;
-    // }
+    if (program_header_note.p_type != PT_NOTE) {
+        fprintf(stderr, "could not find PT_NOTE program segment in %s. Can't inject code.", av[1]);
+        return 2;
+    }
 
-    // Elf64_Phdr program_header_insert = {
-    //     .p_type = PT_LOAD,        // Loadable segment
-    //     .p_flags = PF_R | PF_X,   // Read + Execute
-    //     .p_offset = decrypt_offs, // Offset in file
-    //     .p_vaddr = 0x60000,        // Virtual address
-    //     .p_paddr = 0x0,           // Physical address (ignored on most systems)
-    //     .p_filesz = decrypt_size, // Size in file
-    //     .p_memsz = decrypt_size,  // Size in memory (same unless .bss)
-    //     .p_align = 0x1000         // Must be page-aligned (4096 bytes)
-    // };
-    // bytes_written = write(fd_new, &program_header_insert, sizeof(program_header_insert));
-    // if (bytes_written != sizeof(program_header_insert)) {
-    //     fprintf(stderr, "error while writting to `woody`\n");
-    //     return 1;
-    // }
+    err = lseek(fd_new, header.e_shoff, SEEK_SET);
+    if (err == -1) {
+        fprintf(stderr, "error while lseeking on `woody`\n");
+        return 1;
+    }
 
-    // Set sh_off in header to correct new value
-    header.e_phoff = program_header_offset;
-    // header.e_phnum++;
-    // header.e_entry = 0x60000;
+    Elf64_Shdr section_header_note = {0};
+    int section_header_note_off = 0;
+
+    for (int i = 0; i < header.e_shnum; i++) {
+        bytes_read = read(fd_new, &section_header_note, sizeof(section_header_note));
+        if (bytes_read == -1) {
+            fprintf(stderr, "error while reading from `woody`\n");
+            return 1;
+        }
+
+        section_header_note_off = header.e_shoff + i * sizeof(section_header_note);
+        uint8_t section_in_program_segment = program_header_note.p_offset <= section_header_note.sh_offset &&
+                                             section_header_note.sh_offset <= program_header_note.p_offset + program_header_note.p_filesz;
+        if (section_in_program_segment && section_header_note.sh_type == SHT_NOTE) break;
+    }
+
+    if (section_header_note.sh_type != SHT_NOTE) {
+        fprintf(stderr, "could not find section SHT_NOTE in %s. Can't inject code.", av[1]);
+        return 2;
+    }
+
+    section_header_note.sh_type = SHT_PROGBITS;
+    section_header_note.sh_flags = SHF_ALLOC | SHF_EXECINSTR;
+    section_header_note.sh_addr = 0x10000;
+    section_header_note.sh_offset = decrypt_offs;
+    section_header_note.sh_size = decrypt_size;
+    section_header_note.sh_addralign = 0x1000;
+
+    err = lseek(fd_new, section_header_note_off, SEEK_SET);
+    if (err == -1) {
+        fprintf(stderr, "error while lseeking on `woody`\n");
+        return 1;
+    }
+
+    bytes_written = write(fd_new, &section_header_note, sizeof(section_header_note));
+    if (bytes_written != sizeof(section_header_note)) {
+        fprintf(stderr, "error while writting to `woody`\n");
+        return 1;
+    }
+
+    program_header_note.p_type = PT_LOAD;
+    program_header_note.p_offset = decrypt_offs;
+    program_header_note.p_vaddr = 0x10000;
+    program_header_note.p_paddr = 0x10000;
+    program_header_note.p_filesz = decrypt_size;
+    program_header_note.p_memsz = decrypt_size;
+    program_header_note.p_flags = PF_X | PF_R;
+    program_header_note.p_align = 0x1000;
+
+    err = lseek(fd_new, program_header_note_off, SEEK_SET);
+    if (err == -1) {
+        fprintf(stderr, "error while lseeking on `woody`\n");
+        return 1;
+    }
+
+    bytes_written = write(fd_new, &program_header_note, sizeof(program_header_note));
+    if (bytes_written != sizeof(program_header_note)) {
+        fprintf(stderr, "error while writting to `woody`\n");
+        return 1;
+    }
+
+    header.e_entry = 0x10000;
+
     err = lseek(fd_new, 0, SEEK_SET);
     if (err == -1) {
-        fprintf(stderr, "error while lseeking in %s\n", av[1]);
+        fprintf(stderr, "error while lseeking on `woody`\n");
         return 1;
     }
 
